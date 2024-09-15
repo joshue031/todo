@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>To-Do List</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/simplemde.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f0f4f8;
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        .category {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .category-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .category-title {
+            font-size: 1.5em;
+            color: #34495e;
+            margin: 0;
+        }
+        .task {
+            display: flex;
+            align-items: center;
+            padding: 5px;
+            border-radius: 4px;
+            margin-bottom: 0px;
+            transition: background-color 0.3s;
+        }
+        .task:hover {
+            background-color: #f5f5f5;
+        }
+        .task-info {
+            display: flex;
+            cursor: pointer;
+            align-items: center;
+            flex-grow: 1;  /* Allow the task info section to expand */
+            overflow: hidden;  /* Hide any overflow */
+        }
+        .task.completed {
+            background-color: #e8f5e9;
+        }
+        .task-text {
+            flex-grow: 1;
+            pointer-events: none;
+            padding: 5px;
+            border: none;
+            background: transparent;
+            font-size: 1em;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .task-text:disabled {
+            color: #333;
+        }
+        .task-actions {
+            display: flex;
+            gap: 5px;
+        }
+        .btn {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background-color 0.3s;
+        }
+        .btn-primary {
+            background-color: #3498db;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #2980b9;
+        }
+        .btn-secondary {
+            background-color: #95a5a6;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background-color: #7f8c8d;
+        }
+        .btn-danger {
+            background-color: #e74c3c;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #c0392b;
+        }
+        .btn-complete {
+            background-color: #28a745; /* Green background color */
+            color: white; /* White text color */
+            border: none; /* Remove border */
+            padding: 5px 10px; /* Add some padding */
+            border-radius: 4px; /* Optional: Rounded corners */
+            cursor: pointer; /* Pointer cursor on hover */
+            display: inline-flex;
+            align-items: center;
+        }
+        .btn-complete:hover {
+            background-color: #218838; /* Darker green on hover */
+        }
+        .btn-showcomplete {
+            background-color: #28a745; /* Green background color */
+            color: white; /* White text color */
+            border: none; /* Remove border */
+            padding: 5px 10px; /* Add some padding */
+            border-radius: 4px; /* Optional: Rounded corners */
+            cursor: pointer; /* Pointer cursor on hover */
+            display: inline-flex;
+            align-items: center;
+        }
+        .btn-showcomplete:hover {
+            background-color: #218838; /* Darker green on hover */
+        }
+        .btn-notes {
+            background-color: #ffc107; /* Yellow background color */
+            color: black; /* Black text color */
+            border: none; /* Remove border */
+            padding: 5px 10px; /* Add some padding */
+            border-radius: 4px; /* Optional: Rounded corners */
+            cursor: pointer; /* Pointer cursor on hover */
+            display: inline-flex;
+            align-items: center;
+        }
+        .btn-notes:hover {
+            background-color: #e0a800; /* Darker yellow on hover */
+        }
+        #markdown-editor {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 80%;
+            z-index: 1000;
+            background-color: white;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+        }
+        #markdown-editor .editor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        #markdown-editor .editor-title {
+            font-size: 1.2em;
+            color: #2c3e50;
+        }
+        .overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 999;
+        }
+    </style>
+</head>
+<body>
+    <h1>To-Do List</h1>
+    <button id="add-category" class="btn btn-primary">+Topic</button>
+    <div id="categories-container"></div>
+
+    <div id="markdown-editor">
+        <div class="editor-header">
+            <span class="editor-title">Edit Task Details</span>
+            <button id="close-editor" class="btn btn-secondary">Close</button>
+        </div>
+        <textarea id="editor-content"></textarea>
+    </div>
+    <div class="overlay"></div>
+
+    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/simplemde.min.js') }}"></script>
+    <script>
+        let simplemde;
+        let currentTaskId;
+
+        $(document).ready(function() {
+            simplemde = new SimpleMDE({ element: document.getElementById("editor-content") });
+            loadCategories();
+
+            $('#add-category').click(function() {
+                const categoryName = prompt("Enter category name:");
+                if (categoryName) {
+                    $.post('/add_category', { name: categoryName }, function(category) {
+                        loadCategories();
+                    });
+                }
+            });
+
+            $('#close-editor').click(function() {
+                $('#markdown-editor, .overlay').hide();
+                saveTaskContent();
+            });
+
+            $(document).on('click', '.add-task', function() {
+                const categoryId = $(this).data('category-id');
+                const taskDescription = prompt("Enter task description:");
+                if (taskDescription) {
+                    $.post('/add_task', {
+                        category_id: categoryId,
+                        date_time: new Date().toISOString(),
+                        description: taskDescription
+                    }, function(task) {
+                        loadTasks(categoryId);  // Load tasks for this category only
+                    });
+                }
+            });
+
+            $(document).on('change', '.task-checkbox', function() {
+                const taskId = $(this).data('task-id');
+                $.post(`/complete_task/${taskId}`, function() {
+                    loadCategories();
+                });
+            });
+
+            $(document).on('click', '.complete-task', function() {
+                const taskId = $(this).data('task-id');
+                $.post(`/complete_task/${taskId}`, function() {
+                    loadCategories();
+                });
+            });
+
+            $(document).on('click', '.edit-task', function() {
+                const taskText = $(this).closest('.task').find('.task-text');
+                const taskDateTime = $(this).closest('.task').find('.task-date-time');
+                taskText.prop('disabled', false).focus();
+                taskDateTime.prop('disabled', false).focus();
+            });
+
+            //$(document).on('blur', '.task-text, .task-date-time', function() {
+            //    saveTaskDetails($(this).closest('.task'));
+            //});
+
+            $(document).on('keypress', '.task-text, .task-date-time', function(e) {
+                if (e.which == 13) { // Enter key pressed
+                    saveTaskDetails($(this).closest('.task'));
+                }
+            });
+
+            $(document).on('click', '.delete-task', function() {
+                const taskId = $(this).data('task-id');
+                if (confirm('Are you sure you want to delete this task?')) {
+                    $.post(`/delete_task/${taskId}`, function() {
+                        loadCategories();
+                    });
+                }
+            });
+
+            $(document).on('click', '.task-info', function() {
+                const taskId = $(this).data('task-id');
+                window.open(`/edit_task/${taskId}`, '_blank');
+            });
+
+            $(document).on('click', '.toggle-completed', function() {
+                const categoryId = $(this).data('category-id');
+                const tasksContainer = $(`.category[data-category-id="${categoryId}"] .tasks-container`);
+                const button = $(this);
+
+                // Toggle completed tasks visibility
+                const isHidden = tasksContainer.find('.task[data-completed="true"]').is(':hidden');
+                
+                if (isHidden) {
+                    // Show completed tasks
+                    tasksContainer.find('.task[data-completed="true"]').show();
+                    button.text('^');
+                } else {
+                    // Hide completed tasks
+                    tasksContainer.find('.task[data-completed="true"]').hide();
+                    button.text('v');
+                }
+            });
+
+            $(document).on('click', '.open-markdown', function() {
+                const taskId = $(this).data('task-id');
+                window.open(`/edit_task/${taskId}`, '_blank');
+            });
+
+            // Category events
+
+            $(document).on('click', '.edit-category', function() {
+                const categoryTitle = $(this).closest('.category-header').find('.category-title');
+                categoryTitle.prop('disabled', false).focus();
+            });
+
+            $(document).on('blur', '.category-title', function() {
+                saveCategoryName($(this));
+            });
+
+            $(document).on('keypress', '.category-title', function(e) {
+                if (e.which == 13) { // Enter key pressed
+                    saveCategoryName($(this));
+                }
+            });
+
+            $(document).on('click', '.delete-category', function() {
+                const categoryId = $(this).data('category-id');
+                if (confirm('Are you sure you want to delete this category and all its tasks?')) {
+                    $.post(`/delete_category/${categoryId}`, function() {
+                        loadCategories();
+                    });
+                }
+            });
+
+            $(document).on('click', '.move-category-up', function() {
+                const categoryId = $(this).data('category-id');
+                $.post(`/move_category/${categoryId}/up`, function() {
+                    loadCategories();
+                });
+            });
+
+            $(document).on('click', '.move-category-down', function() {
+                const categoryId = $(this).data('category-id');
+                $.post(`/move_category/${categoryId}/down`, function() {
+                    loadCategories();
+                });
+            });
+
+            simplemde.codemirror.on("drop", function(editor, event) {
+                event.preventDefault();
+                const files = event.dataTransfer.files;
+                if (files.length > 0) {
+                    uploadFiles(files);
+                }
+            });
+        });
+
+        function loadCategories() {
+            $.get('/get_categories', function(categories) {
+                $('#categories-container').empty();
+                categories.forEach(function(category) {
+                    const categoryHtml = `
+                        <div class="category" data-category-id="${category.id}">
+                            <div class="category-header" style="display: flex; justify-content: space-between; align-items: center;">
+                                <div style="display: flex; align-items: center;">
+                                    <button class="toggle-completed btn btn-showcomplete" data-category-id="${category.id}" style="margin-right: 10px;">v</button>
+                                    <button class="add-task btn btn-primary" data-category-id="${category.id}" style="margin-right: 10px;">+</button>
+                                    <input type="text" class="category-title" data-category-id="${category.id}" value="${category.name}" disabled style="font-size: 1.5em; color: #34495e; margin: 0; background-color: transparent; border: none;">
+                                </div>
+                                <div class="category-actions" style="display: flex; align-items: center;">
+                                    <button class="edit-category btn btn-secondary" data-category-id="${category.id}"><i class="fas fa-edit"></i></button>
+                                    <button class="btn btn-primary move-category-up" data-category-id="${category.id}">↑</button>
+                                    <button class="btn btn-primary move-category-down" data-category-id="${category.id}">↓</button>
+                                    <button class="delete-category btn btn-danger" data-category-id="${category.id}"><i class="fas fa-trash"></i></button>
+                                </div>
+                            </div>
+                            <div class="tasks-container"></div>
+                        </div>
+                    `;
+                    $('#categories-container').append(categoryHtml);
+                    loadTasks(category.id);
+                });
+    });
+}
+
+
+
+        function saveCategoryName(element) {
+            const categoryId = element.data('category-id');
+            const newCategoryName = element.val();
+            element.prop('disabled', true); // Disable the input again after editing
+            $.post(`/update_category/${categoryId}`, { name: newCategoryName }, function() {
+                console.log('Category name updated successfully');
+            });
+        }
+
+        function loadTasks(categoryId) {
+            $.get(`/get_tasks/${categoryId}`, function(tasks) {
+                const tasksContainer = $(`.category[data-category-id="${categoryId}"] .tasks-container`);
+                tasksContainer.empty();
+                tasks.forEach(function(task) {
+                    const formattedDateTime = new Date(task.date_time).toLocaleString('en-US', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false // This ensures the time is in 24-hour format
+                    });
+                    
+                    const taskHtml = `
+                        <div class="task ${task.completed ? 'completed' : ''}" data-completed="${task.completed ? 'true' : 'false'}" style="${task.completed ? 'display: none;' : ''}">
+                            <div class="task-info" data-task-id="${task.id}">
+                                <input type="text" class="task-date-time" data-task-id="${task.id}" value="${formattedDateTime}" disabled>
+                                <input type="text" class="task-text" data-task-id="${task.id}" value="${task.description}" disabled>
+                            </div>
+                            <div class="task-actions" style="display: flex; justify-content: flex-end;">
+                                <button class="edit-task btn btn-secondary"><i class="fas fa-edit"></i></button>
+                                <button class="complete-task btn ${task.completed ? 'btn-danger' : 'btn-complete'}" data-task-id="${task.id}">
+                                    ${task.completed ? '<i class="fas fa-undo"></i>' : '<i class="fas fa-check-circle"></i>'}
+                                </button>
+                                <button class="open-markdown btn btn-notes" data-task-id="${task.id}"><i class="fas fa-sticky-note"></i></button>
+                                <button class="delete-task btn btn-danger" data-task-id="${task.id}"><i class="fas fa-trash"></i></button>
+                            </div>
+                        </div>
+                    `;
+                    tasksContainer.append(taskHtml);
+                });
+            });
+        }
+
+
+
+        function openMarkdownEditor(taskId) {
+            currentTaskId = taskId;
+            $.get(`/get_task_content/${taskId}`, function(data) {
+                if (simplemde) {
+                    simplemde.toTextArea();
+                    simplemde = null;
+                }
+                simplemde = new SimpleMDE({ element: document.getElementById("editor-content") });
+                simplemde.value(data.content);
+                $('#markdown-editor, .overlay').show();
+            });
+        }
+
+        function saveTaskDetails(taskElement) {
+            const taskId = taskElement.find('.task-text').data('task-id');
+            const newDescription = taskElement.find('.task-text').val();
+
+            // Parse and format the date-time correctly before sending it to the backend
+            const dateTimeInput = taskElement.find('.task-date-time').val();
+            const newDateTime = new Date(dateTimeInput).toISOString();  // Convert to ISO format
+
+            taskElement.find('.task-text, .task-date-time').prop('disabled', true); // Disable the inputs again after editing
+            
+            $.post(`/update_task/${taskId}`, { description: newDescription, date_time: newDateTime }, function() {
+                console.log('Task details updated successfully');
+            });
+        }
+
+        function saveTaskContent() {
+            if (currentTaskId) {
+                $.post(`/save_task_content/${currentTaskId}`, {
+                    content: simplemde.value()
+                }, function() {
+                    console.log('Content saved successfully');
+                });
+            }
+        }
+
+        function uploadFiles(files) {
+            if (currentTaskId) {
+                for (let i = 0; i < files.length; i++) {
+                    let formData = new FormData();
+                    formData.append('file', files[i]);
+                    $.ajax({
+                        url: `/upload_file/${currentTaskId}`,
+                        type: 'POST',
+                        data: formData,
+                        processData: false,
+                        contentType: false,
+                        success: function(attachment) {
+                            const imageUrl = `/uploads/${attachment.file_path.split('/').pop()}`;
+                            const imageMarkdown = `![${attachment.file_name}](${imageUrl})`;
+                            simplemde.codemirror.replaceSelection(imageMarkdown);
+                        }
+                    });
+                }
+            }
+        }
+    </script>
+</body>
+</html>

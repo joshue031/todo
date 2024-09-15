@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ task_title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/simplemde.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}">
+</head>
+<body>
+    <div id="markdown-editor">
+        <div class="editor-header">
+            <span class="editor-title">{{ task_title }}</span>
+            <button id="close-editor" class="btn btn-secondary">Close</button>
+        </div>
+        <textarea id="editor-content"></textarea>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simplemde/1.11.2/simplemde.min.js"></script>
+    <script>
+        let simplemde;
+        const taskId = {{ task_id }};
+        let isContentChanged = false;
+
+        $(document).ready(function() {
+            simplemde = new SimpleMDE({ element: document.getElementById("editor-content") });
+
+            // Load initial content
+            $.get(`/get_task_content/${taskId}`, function(data) {
+                const content = data.content || "";
+                simplemde.value(content);
+
+                // Automatically toggle side-by-side view after loading
+                simplemde.toggleSideBySide();
+            });
+
+            // Set up autosave every 5 seconds
+            setInterval(function() {
+                if (isContentChanged) {
+                    saveTaskContent();
+                    isContentChanged = false;  // Reset change flag after saving
+                }
+            }, 5000);
+
+            // Detect changes in the editor
+            simplemde.codemirror.on("change", function() {
+                isContentChanged = true;
+            });
+
+            // Save on close button click
+            $('#close-editor').click(function() {
+                saveTaskContent(function() {
+                    window.close();
+                });
+            });
+
+            // Save before the window unloads (like if user closes the tab/window directly)
+            $(window).on('beforeunload', function() {
+                if (isContentChanged) {
+                    saveTaskContent();
+                }
+            });
+
+            // Handle file drop event
+            simplemde.codemirror.on("drop", function(editor, event) {
+                event.preventDefault();
+                const files = event.dataTransfer.files;
+                if (files.length > 0) {
+                    uploadImage(files[0]);
+                }
+            });
+
+            function uploadImage(file) {
+                let formData = new FormData();
+                formData.append('file', file);
+
+                $.ajax({
+                    url: '/upload_image',
+                    type: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    success: function(response) {
+                        if (response.file_url) {
+                            // Insert the image HTML with a reasonable max width
+                            const imageMarkdown = `<img src="${response.file_url}" alt="${file.name}" style="max-width: 100%; height: auto;">`;
+                            simplemde.codemirror.replaceSelection(imageMarkdown);
+                        }
+                    },
+                    error: function() {
+                        alert('Image upload failed.');
+                    }
+                });
+            }
+
+        });
+
+        function saveTaskContent(callback) {
+            const content = simplemde.value();
+            $.post(`/save_task_content/${taskId}`, { content: content }, function() {
+                console.log('Content saved successfully');
+                if (callback) callback();  // If there's a callback, call it (for close button)
+            });
+        }
+    </script>
+</body>
+</html>

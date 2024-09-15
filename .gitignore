@@ -1,0 +1,5 @@
+# Ignore static directories
+static/js/
+static/webfonts/
+static/css/
+
