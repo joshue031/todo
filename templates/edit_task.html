@@ -73,19 +73,21 @@
 
             function uploadImage(file) {
                 let formData = new FormData();
-                formData.append('file', file);
+                formData.append('documents', file);
 
                 $.ajax({
-                    url: '/upload_image',
+                    url: '/upload_file',
                     type: 'POST',
                     data: formData,
                     processData: false,
                     contentType: false,
                     success: function(response) {
-                        if (response.file_url) {
-                            // Insert the image HTML with a reasonable max width
-                            const imageMarkdown = `<img src="${response.file_url}" alt="${file.name}" style="max-width: 100%; height: auto;">`;
-                            simplemde.codemirror.replaceSelection(imageMarkdown);
+                        if (response.file_urls && response.file_urls.length > 0) {
+                            response.file_urls.forEach(function(fileUrl) {
+                                // Insert each image HTML with a reasonable max width into the markdown
+                                const imageMarkdown = `<img src="${fileUrl}" alt="Uploaded file" style="max-width: 100%; height: auto;">`;
+                                simplemde.codemirror.replaceSelection(imageMarkdown);
+                            });
                         }
                     },
                     error: function() {

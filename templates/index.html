@@ -4,8 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>To-Do List</title>
+    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/simplemde.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/marked.min.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/simplemde.min.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/llm.min.css') }}">
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -180,22 +184,211 @@
     </style>
 </head>
 <body>
-    <h1>To-Do List</h1>
-    <button id="add-category" class="btn btn-primary">+Topic</button>
-    <div id="categories-container"></div>
+    <!-- Add tabs to navigate between the to-do list and LLM interaction -->
+    <ul class="nav-tabs">
+        <li><a href="#to-do-list" id="to-do-tab">To-Do List</a></li>
+        <li><a href="#llm-interaction" id="llm-tab">LLM Interaction</a></li>
+    </ul>
 
-    <div id="markdown-editor">
-        <div class="editor-header">
-            <span class="editor-title">Edit Task Details</span>
-            <button id="close-editor" class="btn btn-secondary">Close</button>
+    <!-- To-do list component of application -->
+    <div id="to-do-list" class="tab-content">
+
+        <h1>To-Do List</h1>
+        <button id="add-category" class="btn btn-primary">+Topic</button>
+        <div id="categories-container"></div>
+
+        <div id="markdown-editor">
+            <div class="editor-header">
+                <span class="editor-title">Edit Task Details</span>
+                <button id="close-editor" class="btn btn-secondary">Close</button>
+            </div>
+            <textarea id="editor-content"></textarea>
         </div>
-        <textarea id="editor-content"></textarea>
-    </div>
-    <div class="overlay"></div>
+        <div class="overlay"></div>
 
-    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/simplemde.min.js') }}"></script>
+    </div>
+
+    <!-- Content for LLM Interaction -->
+    <div id="llm-interaction" class="tab-content" style="display:none;">
+        <h2>LLM</h2>
+
+        <div id="file-list">
+            <h4>Select files to include in your query:</h4>
+            <ul id="uploaded-files">
+                <!-- Files will be appended here -->
+            </ul>
+        </div>
+        
+        <!-- Output section -->
+        <div id="llm-output-container" style="height: 400px; overflow-y: auto; padding: 20px; background-color: #f8f8f8; border-radius: 10px; border: 1px solid #e0e0e0; margin-bottom: 20px;">
+            <!-- Chat components will be dynamically added here -->
+        </div>
+
+        <!-- Input section -->
+        <div class="input-container">
+            <label for="file-input" class="upload-icon">
+                <i class="fas fa-paperclip"></i>
+            </label>
+            <input type="file" id="file-input" name="documents" multiple>
+            <textarea id="query-input" placeholder="Ask a question..."></textarea>
+            <button id="ask-query" class="submit-button">
+                <i class="fas fa-paper-plane"></i>
+            </button>
+        </div>
+    </div>
+
     <script>
+        // Toggle between tabs
+        document.getElementById('to-do-tab').addEventListener('click', function() {
+          document.getElementById('to-do-list').style.display = 'block';
+          document.getElementById('llm-interaction').style.display = 'none';
+        });
+        
+        document.getElementById('llm-tab').addEventListener('click', function() {
+          document.getElementById('to-do-list').style.display = 'none';
+          document.getElementById('llm-interaction').style.display = 'block';
+        });
+    </script>
+
+    <script>
+        // Fetch uploaded files and display them for selection
+        function displayUploadedFiles() {
+            $.get('/get_uploaded_files', function(response) {
+                $('#uploaded-files').empty();
+                response.file_paths.forEach(function(file) {
+                    const listItem = `
+                        <li>
+                            <input type="checkbox" class="file-checkbox" value="${file}"> ${file.split('/').pop()}
+                        </li>
+                    `;
+                    $('#uploaded-files').append(listItem);
+                });
+            });
+        }
+
+        // Trigger display of uploaded files when the page loads
+        $(document).ready(function() {
+            displayUploadedFiles();
+        });
+
+        $('#ask-query').click(function(e) {
+            e.preventDefault();
+
+            const query = $('#query-input').val();
+            if (!query.trim()) {
+                alert("Please enter a query.");
+                return;
+            }
+
+            const selectedFiles = [];
+            $('.file-checkbox:checked').each(function() {
+                selectedFiles.push($(this).val());
+            });
+
+            console.log(selectedFiles)
+
+            // No need to upload the files again, directly initiate the streaming request
+            startEventSource(query, selectedFiles); // Pass the file paths directly
+
+        });
+
+        function startEventSource(query, fileRefs) {
+            // Prepare the URL with query and file references
+            const url = `/ask?query=${encodeURIComponent(query)}&files=${encodeURIComponent(fileRefs.join(','))}`;
+            
+            // Display the user query in the chat
+            const userMessage = `<div class="message user-message">${query}</div>`;
+            $('#llm-output-container').append(userMessage);
+            $('#query-input').val('');  // Clear the input box
+
+            // Add a new div for the LLM response
+            const llmMessageId = `llm-stream-${Date.now()}`;
+            const llmMessage = `<div class="message llm-message" id="${llmMessageId}"></div>`;
+            $('#llm-output-container').append(llmMessage);
+
+            // Open an EventSource with the query as a URL parameter (GET request)
+            const eventSource = new EventSource(url);
+
+            let responseBuffer = '';  // Buffer to store the full response for Markdown rendering
+            let previousToken = '';
+
+            eventSource.addEventListener('message', function(event) {
+                const token = event.data.trim();
+                if (!token) return;
+
+                // Define arrays of tokens that affect spacing
+                const noSpaceBefore = [',', '.', '?', '!', ':', ';', ')', ']', '}', '"', '...'];
+                const noSpaceAfter = ['(', '[', '{', '"'];
+                const noSpaceAround = ["'", "’", "*", "**", "_", "__", "-", "—", "#"];
+
+                let appendSpace = true;
+
+                if (responseBuffer.length === 0) {
+                    appendSpace = false;
+                } else if (noSpaceAfter.includes(previousToken) || noSpaceAround.includes(previousToken)) {
+                    appendSpace = false;
+                } else if (noSpaceBefore.includes(token) || noSpaceAround.includes(token)) {
+                    appendSpace = false;
+                }
+
+                if (appendSpace) {
+                    responseBuffer += ' ';
+                }
+
+                responseBuffer += token;
+                previousToken = token;
+
+                // Render the entire buffer as Markdown
+                $(`#${llmMessageId}`).html(marked.parse(responseBuffer));
+                $('#llm-output-container').scrollTop($('#llm-output-container')[0].scrollHeight);
+            });
+
+            eventSource.addEventListener('error', function(event) {
+                console.error("Error occurred:", event);
+                eventSource.close();
+            });
+
+            eventSource.addEventListener('done', function() {
+                eventSource.close();
+            });
+        }
+
+        // Handle file upload (extend with your backend logic)
+        $('#file-input').change(function(e) {
+            const files = $(this).prop('files');  // Get all selected files
+            let formData = new FormData();
+            
+            // Append all selected files to the FormData
+            $.each(files, function(index, file) {
+                formData.append('documents', file);  // Ensure 'documents' matches the backend key
+            });
+            
+            // Make the POST request to upload the files
+            $.ajax({
+                url: '/upload_file',
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                success: function(response) {
+                    const uploadedFiles = response.file_urls;  // Get the file URLs from the response
+                    
+                    // Display the uploaded files (or you can modify this logic to suit your UI)
+                    uploadedFiles.forEach(function(fileUrl) {
+                        $('#uploaded-files').append(`<li><a href="${fileUrl}" target="_blank">${fileUrl}</a></li>`);
+                    });
+                },
+                error: function() {
+                    alert("Error uploading files");
+                }
+            });
+        });
+
+    </script>
+
+    <!-- To-do list JavaScript-->
+    <script>
+
         let simplemde;
         let currentTaskId;
 
@@ -339,14 +532,6 @@
                     loadCategories();
                 });
             });
-
-            simplemde.codemirror.on("drop", function(editor, event) {
-                event.preventDefault();
-                const files = event.dataTransfer.files;
-                if (files.length > 0) {
-                    uploadFiles(files);
-                }
-            });
         });
 
         function loadCategories() {
@@ -374,10 +559,8 @@
                     $('#categories-container').append(categoryHtml);
                     loadTasks(category.id);
                 });
-    });
-}
-
-
+            });
+        }
 
         function saveCategoryName(element) {
             const categoryId = element.data('category-id');
@@ -424,8 +607,6 @@
             });
         }
 
-
-
         function openMarkdownEditor(taskId) {
             currentTaskId = taskId;
             $.get(`/get_task_content/${taskId}`, function(data) {
@@ -464,26 +645,6 @@
             }
         }
 
-        function uploadFiles(files) {
-            if (currentTaskId) {
-                for (let i = 0; i < files.length; i++) {
-                    let formData = new FormData();
-                    formData.append('file', files[i]);
-                    $.ajax({
-                        url: `/upload_file/${currentTaskId}`,
-                        type: 'POST',
-                        data: formData,
-                        processData: false,
-                        contentType: false,
-                        success: function(attachment) {
-                            const imageUrl = `/uploads/${attachment.file_path.split('/').pop()}`;
-                            const imageMarkdown = `![${attachment.file_name}](${imageUrl})`;
-                            simplemde.codemirror.replaceSelection(imageMarkdown);
-                        }
-                    });
-                }
-            }
-        }
     </script>
 </body>
 </html>

@@ -1,12 +1,25 @@
 import os
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 from datetime import datetime
+import json
 import sqlite3
 import uuid
 import markdown
+import requests
+
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+#from sentence_transformers import SentenceTransformer
+#from langchain_community.vectorstores import FAISS
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'data'
+OLLAMA_API_URL = "http://localhost:11434/api/generate"
+
+# Create embeddings
+# embedding_model = SentenceTransformer('all-MiniLM-L6-v2')  # You can choose another model if you prefer
+# vector_store = FAISS.from_documents(split_docs, embedding_model)
 
 # Ensure that the upload directory exists
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
@@ -263,7 +276,7 @@ def save_task_content(task_id):
     return jsonify({"success": True})
 
 @app.route('/upload_file/<int:task_id>', methods=['POST'])
-def upload_file(task_id):
+def upload_files(task_id):
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     file = request.files['file']
@@ -291,34 +304,213 @@ def get_attachments(task_id):
     conn.close()
     return jsonify(attachments)
 
-@app.route('/upload_image', methods=['POST'])
-def upload_image():
-    if 'file' not in request.files:
+@app.route('/upload_file', methods=['POST'])
+def upload_file():
+    if 'documents' not in request.files:
         return jsonify({"error": "No file part"}), 400
-    file = request.files['file']
-    if file.filename == '':
+    
+    files = request.files.getlist('documents')  # Handle multiple files
+    if len(files) == 0:
         return jsonify({"error": "No selected file"}), 400
 
-    if file:
-        # Create a subdirectory based on the current date
-        current_date = datetime.now().strftime('%Y-%m-%d')
-        date_folder = os.path.join(app.config['UPLOAD_FOLDER'], current_date)
+    uploaded_file_urls = []
 
-        if not os.path.exists(date_folder):
-            os.makedirs(date_folder)
+    for file in files:
+        if file:
+            # Create a subdirectory based on the current date
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            date_folder = os.path.join(app.config['UPLOAD_FOLDER'], current_date)
 
-        # Save the file with a unique identifier
-        filename = str(uuid.uuid4()) + '_' + file.filename
-        file_path = os.path.join(date_folder, filename)
-        file.save(file_path)
+            if not os.path.exists(date_folder):
+                os.makedirs(date_folder)
 
-        # Return the file path for inserting into markdown
-        file_url = f'/uploads/{current_date}/{filename}'
-        return jsonify({"file_url": file_url})
+            # Save the file with a unique identifier
+            filename = str(uuid.uuid4()) + '_' + file.filename
+            file_path = os.path.join(date_folder, filename)
+            file.save(file_path)
+
+            # Append the file URL for returning it to the frontend
+            file_url = f'/uploads/{current_date}/{filename}'
+            uploaded_file_urls.append(file_url)
+
+    return jsonify({"file_urls": uploaded_file_urls})  # Return all file URLs
+
 
 @app.route('/uploads/<path:filename>')
 def serve_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route('/upload_selected_files', methods=['POST'])
+def upload_selected_files():
+    
+    if 'files' not in request.files:
+        return jsonify({"error": "No files part"}), 400
+
+    files = request.files.getlist('files')
+    file_refs = []
+
+    for file in files:
+        ext = file.filename.rsplit('.', 1)[1].lower()
+        file_folder = os.path.join(app.config['UPLOAD_FOLDER'], ext, datetime.now().strftime('%Y-%m-%d'))
+        if not os.path.exists(file_folder):
+            os.makedirs(file_folder)
+
+        # Save the file with a unique identifier
+        filename = str(uuid.uuid4()) + '_' + file.filename
+        file_path = os.path.join(file_folder, filename)
+        file.save(file_path)
+        file_refs.append(file_path)
+
+    return jsonify({"file_refs": file_refs, "message": "Files uploaded successfully!"})
+
+@app.route('/get_uploaded_files', methods=['GET'])
+def get_uploaded_files():
+    uploaded_files = []
+    for root, dirs, files in os.walk(app.config['UPLOAD_FOLDER']):
+        for file in files:
+            file_path = os.path.relpath(os.path.join(root, file), app.config['UPLOAD_FOLDER'])
+            uploaded_files.append(file_path)
+    return jsonify({"file_paths": uploaded_files})
+
+@app.route('/ask', methods=['GET', 'POST'])
+def ask_llama():
+    query = request.args.get('query')
+    file_refs = request.args.get('files', '').split(',')
+
+    extracted_texts = []
+
+    # Load the selected files and retrieve their content
+    for file_ref in file_refs:
+        if(file_ref == ''): continue
+
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], file_ref.strip())
+
+        # Determine if the file is PDF or plain text
+        ext = file_ref.rsplit('.', 1)[1].lower()
+        if ext == 'pdf':
+            loader = PyPDFLoader(file_path)
+        else:
+            loader = TextLoader(file_path, encoding='utf-8')
+        
+        documents = loader.load()
+        for doc in documents:
+            extracted_texts.append(doc.page_content)
+
+    # Combine the extracted content into a single string
+    combined_text = "\n".join(extracted_texts)
+
+    # Create a prompt combining the extracted content and the user query
+    final_prompt = f"{combined_text}\n\nUser Question: {query}"
+
+    # Function to stream the response
+    def stream_llama_response():
+        try:
+            response = requests.post(
+                OLLAMA_API_URL,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "model": "llama3.2",
+                    "prompt": final_prompt
+                },
+                stream=True
+            )
+            response.raise_for_status()
+
+            # Stream the response chunk by chunk
+            for line in response.iter_lines():
+                if line:
+                    json_data = json.loads(line.decode('utf-8'))
+                    if 'response' in json_data:
+                        yield f"data:{json_data['response']}\n\n"
+                    if json_data.get("done"):
+                        yield "event: done\ndata: \n\n"  # Indicate we're done
+                        break
+
+        except requests.exceptions.RequestException as e:
+            yield f"data:Error communicating with the Llama model: {str(e)}\n\n"
+            yield "event: done\ndata: \n\n"
+
+    return Response(stream_llama_response(), content_type='text/event-stream')
+
+# @app.route('/ask', methods=['GET'])
+# def ask_llama():
+#     query = request.args.get('query')
+    
+#     selected_files = request.form.getlist('selectedFiles')
+
+#     extracted_texts = []
+
+#     # Load the selected files and retrieve their content
+#     for file in selected_files:
+#         filepath = os.path.join(app.config['UPLOAD_FOLDER'], file)
+#         loader = PyPDFLoader(filepath)
+#         documents = loader.load()
+
+#         for doc in documents:
+#             extracted_texts.append(doc.page_content)
+
+#     # Create a prompt combining the extracted content and the user query
+#     combined_text = "\n".join(extracted_texts)
+#     final_prompt = f"{combined_text}\n\nUser Question: {query}"
+
+#     def stream_llama_response():
+#         try:
+#             response = requests.post(
+#                 OLLAMA_API_URL,
+#                 headers={"Content-Type": "application/json"},
+#                 json={
+#                     "model": "llama3.2",
+#                     "prompt": final_prompt
+#                 },
+#                 stream=True
+#             )
+#             response.raise_for_status()  # Check for HTTP errors
+
+#             # Stream the response chunk by chunk
+#             for line in response.iter_lines():
+#                 if line:
+#                     json_data = json.loads(line.decode('utf-8'))
+#                     if 'response' in json_data:
+#                         yield f"data:{json_data['response']}\n\n"
+#                     if json_data.get("done"):
+#                         yield "event: done\ndata: \n\n"  # Indicate that we're done
+#                         break
+
+#         except requests.exceptions.RequestException as e:
+#             yield f"data:Error communicating with the Llama model: {str(e)}\n\n"
+#             yield "event: done\ndata: \n\n"  # Close stream on error
+
+#     return Response(stream_llama_response(), content_type='text/event-stream')
+
+# def process_uploaded_files(file_paths):
+#     documents = []
+    
+#     for file_path in file_paths:
+#         ext = file_path.rsplit('.', 1)[1].lower()
+
+#         if ext == 'pdf':
+#             # Process the file as a PDF
+#             loader = PyPDFLoader(file_path)
+#             docs = loader.load()
+#         else:
+#             # Process the file as a text file (plain text, code files, etc.)
+#             loader = TextLoader(file_path, encoding='utf-8')
+#             docs = loader.load()
+        
+#         documents.extend(docs)
+    
+#     return documents
+
+# Now you can split the documents into chunks if needed:
+# def split_documents(documents):
+#     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+#     split_docs = text_splitter.split_documents(documents)
+#     return split_docs
+
+# Now you can ask questions to your documents
+# def query_documents(query):
+#     results = vector_store.similarity_search(query)
+#     return results
 
 if __name__ == '__main__':
     init_db()
